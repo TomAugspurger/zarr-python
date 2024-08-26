@@ -3,13 +3,13 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated, Literal
 
 import numpy as np
 
 from zarr.abc.codec import ArrayBytesCodec
 from zarr.core.buffer import Buffer, NDArrayLike, NDBuffer
-from zarr.core.common import JSON, parse_enum, parse_named_configuration
+from zarr.core.common import JSON, Tag, parse_enum, parse_named_configuration
 from zarr.registry import register_codec
 
 if TYPE_CHECKING:
@@ -30,9 +30,10 @@ class Endian(Enum):
 default_system_endian = Endian(sys.byteorder)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class BytesCodec(ArrayBytesCodec):
     is_fixed_size = True
+    name: Annotated[Literal["bytes"], Tag] = "bytes"
 
     endian: Endian | None
 

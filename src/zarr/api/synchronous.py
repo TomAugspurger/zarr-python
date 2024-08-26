@@ -1,16 +1,29 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import zarr.api.asynchronous as async_api
 from zarr._compat import _deprecate_positional_args
 from zarr.core.array import Array, AsyncArray
+from zarr.core.buffer import NDArrayLike
+from zarr.core.common import (
+    JSON,
+    AccessModeLiteral,
+    ChunkCoords,
+    ZarrFormat,
+)
 from zarr.core.group import Group
 from zarr.core.sync import sync
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    import numpy.typing as npt
+
+    from zarr.abc.codec import Codec
     from zarr.core.buffer import NDArrayLike
-    from zarr.core.common import JSON, AccessModeLiteral, ChunkCoords, ZarrFormat
+    from zarr.core.chunk_key_encodings import CHUNK_KEY_ENCODINGS
+    from zarr.core.common import JSON, AccessModeLiteral, ChunkCoords, MemoryOrder, ZarrFormat
     from zarr.storage import StoreLike
 
 __all__ = [
@@ -40,6 +53,12 @@ __all__ = [
     "zeros",
     "zeros_like",
 ]
+
+
+def _maybe_tuple_to_tuple(v: int | ChunkCoords) -> ChunkCoords:
+    if isinstance(v, int):
+        v = (v,)
+    return v
 
 
 def consolidate_metadata(*args: Any, **kwargs: Any) -> Group:
@@ -74,6 +93,11 @@ def open(
     path: str | None = None,
     **kwargs: Any,  # TODO: type kwargs as valid args to async_api.open
 ) -> Array | Group:
+    for k in ["shape", "chunks", "chunk_shape"]:
+        v = kwargs.get(k)
+        if v is not None:
+            kwargs[k] = _maybe_tuple_to_tuple(v)
+
     obj = sync(
         async_api.open(
             store=store,
@@ -104,7 +128,12 @@ def save(
 ) -> None:
     return sync(
         async_api.save(
-            store, *args, zarr_version=zarr_version, zarr_format=zarr_format, path=path, **kwargs
+            store,
+            *args,
+            zarr_version=zarr_version,
+            zarr_format=zarr_format,
+            path=path,
+            **kwargs,
         )
     )
 
@@ -227,8 +256,79 @@ def open_group(
 
 
 # TODO: add type annotations for kwargs
-def create(*args: Any, **kwargs: Any) -> Array:
-    return Array(sync(async_api.create(*args, **kwargs)))
+def create(
+    shape: int | ChunkCoords,
+    *,  # Note: this is a change from v2
+    chunks: int | ChunkCoords | None = None,  # TODO: v2 allowed chunks=True
+    dtype: npt.DTypeLike | None = None,
+    compressor: dict[str, JSON] | None = None,  # TODO: default and type change
+    fill_value: Any = 0,  # TODO: need type
+    order: MemoryOrder | None = None,  # TODO: default change
+    store: str | StoreLike | None = None,
+    synchronizer: Any | None = None,
+    overwrite: bool = False,
+    path: async_api.PathLike | None = None,
+    chunk_store: StoreLike | None = None,
+    filters: list[dict[str, JSON]] | None = None,  # TODO: type has changed
+    cache_metadata: bool | None = None,
+    cache_attrs: bool | None = None,
+    read_only: bool | None = None,
+    object_codec: Codec | None = None,  # TODO: type has changed
+    dimension_separator: Literal[".", "/"] | None = None,
+    write_empty_chunks: bool = False,  # TODO: default has changed
+    zarr_version: ZarrFormat | None = None,  # deprecated
+    zarr_format: ZarrFormat | None = None,
+    meta_array: Any | None = None,  # TODO: need type
+    attributes: dict[str, JSON] | None = None,
+    # v3 only
+    chunk_shape: int | ChunkCoords | None = None,
+    chunk_key_encoding: (
+        CHUNK_KEY_ENCODINGS
+        | tuple[Literal["default"], Literal[".", "/"]]
+        | tuple[Literal["v2"], Literal[".", "/"]]
+        | None
+    ) = None,
+    codecs: Iterable[Codec | dict[str, JSON]] | None = None,
+    dimension_names: Iterable[str] | None = None,
+    **kwargs: Any,
+) -> Array:
+    shape = _maybe_tuple_to_tuple(shape)
+    chunks = _maybe_tuple_to_tuple(chunks)
+    chunk_shape = _maybe_tuple_to_tuple(chunk_shape)
+
+    return Array(
+        sync(
+            async_api.create(
+                shape,
+                chunks=chunks,
+                dtype=dtype,
+                compressor=compressor,
+                fill_value=fill_value,
+                order=order,
+                store=store,
+                synchronizer=synchronizer,
+                overwrite=overwrite,
+                path=path,
+                chunk_store=chunk_store,
+                filters=filters,
+                cache_metadata=cache_metadata,
+                cache_attrs=cache_attrs,
+                read_only=read_only,
+                object_codec=object_codec,
+                dimension_separator=dimension_separator,
+                write_empty_chunks=write_empty_chunks,
+                zarr_version=zarr_version,
+                zarr_format=zarr_format,
+                meta_array=meta_array,
+                attributes=attributes,
+                chunk_shape=chunk_shape,
+                chunk_key_encoding=chunk_key_encoding,
+                codecs=codecs,
+                dimension_names=dimension_names,
+                **kwargs,
+            )
+        )
+    )
 
 
 # TODO: add type annotations for kwargs

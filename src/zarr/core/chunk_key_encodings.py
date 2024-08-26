@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from dataclasses import dataclass
-from typing import Literal, cast
+from dataclasses import dataclass, field
+from typing import Annotated, Literal, cast
 
 from zarr.abc.metadata import Metadata
 from zarr.core.common import (
     JSON,
     ChunkCoords,
+    Tag,
     parse_named_configuration,
 )
 
@@ -20,15 +21,24 @@ def parse_separator(data: JSON) -> SeparatorLiteral:
     return cast(SeparatorLiteral, data)
 
 
-@dataclass(frozen=True)
-class ChunkKeyEncoding(Metadata):
-    name: str
+@dataclass
+class ChunkKeyEncodingConfiguration:
     separator: SeparatorLiteral = "."
 
-    def __init__(self, *, separator: SeparatorLiteral) -> None:
-        separator_parsed = parse_separator(separator)
 
-        object.__setattr__(self, "separator", separator_parsed)
+# TODO: confirm whether this is abstract?
+@dataclass(frozen=True, kw_only=True)
+class ChunkKeyEncoding(Metadata):
+    name: Annotated[str, Tag]
+    configuration: ChunkKeyEncodingConfiguration = field(
+        default_factory=ChunkKeyEncodingConfiguration
+    )
+
+    def __post_init__(self) -> None: ...
+
+    # def __post_init__(self) -> None:
+    #     # separator_parsed = parse_separator(self.separator)
+    #     object.__setattr__(self, "separator", separator_parsed)
 
     @classmethod
     def from_dict(cls, data: dict[str, JSON] | ChunkKeyEncoding) -> ChunkKeyEncoding:
@@ -51,7 +61,7 @@ class ChunkKeyEncoding(Metadata):
         raise ValueError(msg)
 
     def to_dict(self) -> dict[str, JSON]:
-        return {"name": self.name, "configuration": {"separator": self.separator}}
+        return {"name": self.name, "configuration": {"separator": self.configuration.separator}}
 
     @abstractmethod
     def decode_chunk_key(self, chunk_key: str) -> ChunkCoords:
@@ -62,9 +72,14 @@ class ChunkKeyEncoding(Metadata):
         pass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class DefaultChunkKeyEncoding(ChunkKeyEncoding):
-    name: Literal["default"] = "default"
+    name: Annotated[Literal["default"], Tag] = "default"
+
+    def __post_init__(self) -> None:
+        if self.name != "default":
+            raise TypeError
+        return super().__post_init__()
 
     def decode_chunk_key(self, chunk_key: str) -> ChunkCoords:
         if chunk_key == "c":
@@ -77,7 +92,7 @@ class DefaultChunkKeyEncoding(ChunkKeyEncoding):
 
 @dataclass(frozen=True)
 class V2ChunkKeyEncoding(ChunkKeyEncoding):
-    name: Literal["v2"] = "v2"
+    name: Annotated[Literal["v2"], Tag] = "v2"
 
     def decode_chunk_key(self, chunk_key: str) -> ChunkCoords:
         return tuple(map(int, chunk_key.split(self.separator)))
@@ -85,3 +100,6 @@ class V2ChunkKeyEncoding(ChunkKeyEncoding):
     def encode_chunk_key(self, chunk_coords: ChunkCoords) -> str:
         chunk_identifier = self.separator.join(map(str, chunk_coords))
         return "0" if chunk_identifier == "" else chunk_identifier
+
+
+CHUNK_KEY_ENCODINGS = DefaultChunkKeyEncoding | V2ChunkKeyEncoding

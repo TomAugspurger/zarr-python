@@ -28,7 +28,7 @@ from zarr.core.buffer import (
     default_buffer_prototype,
     numpy_buffer_prototype,
 )
-from zarr.core.chunk_grids import ChunkGrid, RegularChunkGrid
+from zarr.core.chunk_grids import ChunkGrid, RegularChunkGrid, RegularChunkGridConfiguration
 from zarr.core.common import (
     ChunkCoords,
     ChunkCoordsLike,
@@ -405,7 +405,7 @@ class ShardingCodec(
         if not all(
             s % c == 0
             for s, c in zip(
-                chunk_grid.chunk_shape,
+                chunk_grid.configuration.chunk_shape,
                 self.chunk_shape,
                 strict=False,
             )
@@ -427,7 +427,9 @@ class ShardingCodec(
         indexer = BasicIndexer(
             tuple(slice(0, s) for s in shard_shape),
             shape=shard_shape,
-            chunk_grid=RegularChunkGrid(chunk_shape=chunk_shape),
+            chunk_grid=RegularChunkGrid(
+                configuration=RegularChunkGridConfiguration(chunk_shape=chunk_shape),
+            ),
         )
 
         # setup output array
@@ -470,7 +472,9 @@ class ShardingCodec(
         indexer = get_indexer(
             selection,
             shape=shard_shape,
-            chunk_grid=RegularChunkGrid(chunk_shape=chunk_shape),
+            chunk_grid=RegularChunkGrid(
+                configuration=RegularChunkGridConfiguration(chunk_shape=chunk_shape)
+            ),
         )
 
         # setup output array
@@ -537,7 +541,9 @@ class ShardingCodec(
             BasicIndexer(
                 tuple(slice(0, s) for s in shard_shape),
                 shape=shard_shape,
-                chunk_grid=RegularChunkGrid(chunk_shape=chunk_shape),
+                chunk_grid=RegularChunkGrid(
+                    configuration=RegularChunkGridConfiguration(chunk_shape=chunk_shape)
+                ),
             )
         )
 
@@ -582,7 +588,11 @@ class ShardingCodec(
 
         indexer = list(
             get_indexer(
-                selection, shape=shard_shape, chunk_grid=RegularChunkGrid(chunk_shape=chunk_shape)
+                selection,
+                shape=shard_shape,
+                chunk_grid=RegularChunkGrid(
+                    configuration=RegularChunkGridConfiguration(chunk_shape=chunk_shape)
+                ),
             )
         )
 

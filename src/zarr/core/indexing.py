@@ -289,7 +289,7 @@ def get_chunk_shape(chunk_grid: ChunkGrid) -> ChunkCoords:
     assert isinstance(
         chunk_grid, RegularChunkGrid
     ), "Only regular chunk grid is supported, currently."
-    return chunk_grid.chunk_shape
+    return chunk_grid.configuration.chunk_shape
 
 
 def normalize_integer_selection(dim_sel: int, dim_len: int) -> int:

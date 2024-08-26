@@ -7,7 +7,7 @@ import operator
 from abc import abstractmethod
 from dataclasses import dataclass
 from functools import reduce
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import numpy as np
 
@@ -15,10 +15,9 @@ from zarr.abc.metadata import Metadata
 from zarr.core.common import (
     JSON,
     ChunkCoords,
-    ChunkCoordsLike,
     ShapeLike,
+    Tag,
     parse_named_configuration,
-    parse_shapelike,
 )
 from zarr.core.indexing import ceildiv
 
@@ -141,8 +140,10 @@ def normalize_chunks(chunks: Any, shape: tuple[int, ...], typesize: int) -> tupl
     return tuple(int(c) for c in chunks)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class ChunkGrid(Metadata):
+    name: Annotated[str, Tag]
+
     @classmethod
     def from_dict(cls, data: dict[str, JSON] | ChunkGrid) -> ChunkGrid:
         if isinstance(data, ChunkGrid):
@@ -162,14 +163,21 @@ class ChunkGrid(Metadata):
         pass
 
 
-@dataclass(frozen=True)
-class RegularChunkGrid(ChunkGrid):
+@dataclass(frozen=True, kw_only=True)
+class RegularChunkGridConfiguration:
     chunk_shape: ChunkCoords
 
-    def __init__(self, *, chunk_shape: ChunkCoordsLike) -> None:
-        chunk_shape_parsed = parse_shapelike(chunk_shape)
 
-        object.__setattr__(self, "chunk_shape", chunk_shape_parsed)
+@dataclass(frozen=True, kw_only=True)
+class RegularChunkGrid(ChunkGrid):
+    configuration: RegularChunkGridConfiguration
+    name: Annotated[Literal["regular"], Tag] = "regular"
+
+    def __post_init__(self) -> None:
+        # chunk_shape_parsed = parse_shapelike(self.chunk_shape)
+        # object.__setattr__(self, "chunk_shape", chunk_shape_parsed)
+        if self.name != "regular":
+            raise ValueError
 
     @classmethod
     def _from_dict(cls, data: dict[str, JSON]) -> Self:
@@ -178,16 +186,25 @@ class RegularChunkGrid(ChunkGrid):
         return cls(**configuration_parsed)  # type: ignore[arg-type]
 
     def to_dict(self) -> dict[str, JSON]:
-        return {"name": "regular", "configuration": {"chunk_shape": tuple(self.chunk_shape)}}
+        return {
+            "name": "regular",
+            "configuration": {"chunk_shape": tuple(self.configuration.chunk_shape)},
+        }
 
     def all_chunk_coords(self, array_shape: ChunkCoords) -> Iterator[ChunkCoords]:
         return itertools.product(
-            *(range(0, ceildiv(s, c)) for s, c in zip(array_shape, self.chunk_shape, strict=False))
+            *(
+                range(0, ceildiv(s, c))
+                for s, c in zip(array_shape, self.configuration.chunk_shape, strict=False)
+            )
         )
 
     def get_nchunks(self, array_shape: ChunkCoords) -> int:
         return reduce(
             operator.mul,
-            (ceildiv(s, c) for s, c in zip(array_shape, self.chunk_shape, strict=True)),
+            (
+                ceildiv(s, c)
+                for s, c in zip(array_shape, self.configuration.chunk_shape, strict=True)
+            ),
             1,
         )

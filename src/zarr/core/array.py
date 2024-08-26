@@ -20,9 +20,14 @@ from zarr.core.buffer import (
     NDBuffer,
     default_buffer_prototype,
 )
-from zarr.core.chunk_grids import RegularChunkGrid, normalize_chunks
+from zarr.core.chunk_grids import (
+    RegularChunkGrid,
+    RegularChunkGridConfiguration,
+    normalize_chunks,
+)
 from zarr.core.chunk_key_encodings import (
-    ChunkKeyEncoding,
+    CHUNK_KEY_ENCODINGS,
+    ChunkKeyEncodingConfiguration,
     DefaultChunkKeyEncoding,
     V2ChunkKeyEncoding,
 )
@@ -64,8 +69,11 @@ from zarr.core.indexing import (
     is_scalar,
     pop_fields,
 )
-from zarr.core.metadata.v2 import ArrayV2Metadata
-from zarr.core.metadata.v3 import ArrayV3Metadata
+from zarr.core.metadata import (
+    ArrayV2Metadata,
+    ArrayV3Metadata,
+)
+from zarr.core.metadata.common import ArrayMetadata
 from zarr.core.sync import collect_aiterator, sync
 from zarr.registry import get_pipeline_class
 from zarr.storage import StoreLike, make_store_path
@@ -202,7 +210,7 @@ class AsyncArray:
         # v3 only
         chunk_shape: ChunkCoords | None = None,
         chunk_key_encoding: (
-            ChunkKeyEncoding
+            CHUNK_KEY_ENCODINGS
             | tuple[Literal["default"], Literal[".", "/"]]
             | tuple[Literal["v2"], Literal[".", "/"]]
             | None
@@ -304,7 +312,7 @@ class AsyncArray:
         chunk_shape: ChunkCoords,
         fill_value: Any | None = None,
         chunk_key_encoding: (
-            ChunkKeyEncoding
+            CHUNK_KEY_ENCODINGS
             | tuple[Literal["default"], Literal[".", "/"]]
             | tuple[Literal["v2"], Literal[".", "/"]]
             | None
@@ -314,11 +322,12 @@ class AsyncArray:
         attributes: dict[str, JSON] | None = None,
         exists_ok: bool = False,
     ) -> AsyncArray:
+        from zarr.core.metadata import parse_codecs
+
         if not exists_ok:
             await ensure_no_existing_node(store_path, zarr_format=3)
 
-        shape = parse_shapelike(shape)
-        codecs = list(codecs) if codecs is not None else [BytesCodec()]
+        codecs = tuple(codecs) if codecs is not None else (BytesCodec(),)
 
         if chunk_key_encoding is None:
             chunk_key_encoding = ("default", "/")
@@ -328,13 +337,19 @@ class AsyncArray:
             chunk_key_encoding = (
                 V2ChunkKeyEncoding(separator=chunk_key_encoding[1])
                 if chunk_key_encoding[0] == "v2"
-                else DefaultChunkKeyEncoding(separator=chunk_key_encoding[1])
+                else DefaultChunkKeyEncoding(
+                    configuration=ChunkKeyEncodingConfiguration(separator=chunk_key_encoding[1])
+                )
             )
+
+        codecs = parse_codecs(codecs)
 
         metadata = ArrayV3Metadata(
             shape=shape,
-            data_type=dtype,
-            chunk_grid=RegularChunkGrid(chunk_shape=chunk_shape),
+            data_type=np.dtype(dtype),
+            chunk_grid=RegularChunkGrid(
+                configuration=RegularChunkGridConfiguration(chunk_shape=chunk_shape)
+            ),
             chunk_key_encoding=chunk_key_encoding,
             fill_value=fill_value,
             codecs=codecs,
@@ -780,7 +795,7 @@ class Array:
         # v3 only
         chunk_shape: ChunkCoords | None = None,
         chunk_key_encoding: (
-            ChunkKeyEncoding
+            CHUNK_KEY_ENCODINGS
             | tuple[Literal["default"], Literal[".", "/"]]
             | tuple[Literal["v2"], Literal[".", "/"]]
             | None

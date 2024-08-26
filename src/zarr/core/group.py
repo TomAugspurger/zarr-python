@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
     from zarr.abc.codec import Codec
     from zarr.core.buffer import Buffer, BufferPrototype
-    from zarr.core.chunk_key_encodings import ChunkKeyEncoding
+    from zarr.core.chunk_key_encodings import CHUNK_KEY_ENCODINGS
 
 logger = logging.getLogger("zarr.group")
 
@@ -414,7 +414,7 @@ class AsyncGroup:
         # v3 only
         chunk_shape: ChunkCoords | None = None,
         chunk_key_encoding: (
-            ChunkKeyEncoding
+            CHUNK_KEY_ENCODINGS
             | tuple[Literal["default"], Literal[".", "/"]]
             | tuple[Literal["v2"], Literal[".", "/"]]
             | None
@@ -993,7 +993,7 @@ class Group(SyncMixin):
         # v3 only
         chunk_shape: ChunkCoords | None = None,
         chunk_key_encoding: (
-            ChunkKeyEncoding
+            CHUNK_KEY_ENCODINGS
             | tuple[Literal["default"], Literal[".", "/"]]
             | tuple[Literal["v2"], Literal[".", "/"]]
             | None
@@ -1206,7 +1206,7 @@ class Group(SyncMixin):
         # v3 only
         chunk_shape: ChunkCoords | None = None,
         chunk_key_encoding: (
-            ChunkKeyEncoding
+            CHUNK_KEY_ENCODINGS
             | tuple[Literal["default"], Literal[".", "/"]]
             | tuple[Literal["v2"], Literal[".", "/"]]
             | None

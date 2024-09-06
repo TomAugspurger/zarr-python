@@ -121,7 +121,7 @@ def test_array_v3_fill_value_default(
 
 @pytest.mark.parametrize("store", ["memory"], indirect=True)
 @pytest.mark.parametrize("fill_value", [False, 0.0, 1, 2.3])
-@pytest.mark.parametrize("dtype_str", ["bool", "uint8", "float32", "complex64"])
+@pytest.mark.parametrize("dtype_str", ["bool", "uint8", "float32", "complex64", "S6"])
 def test_array_v3_fill_value(store: MemoryStore, fill_value: int, dtype_str: str) -> None:
     shape = (10,)
     arr = Array.create(
@@ -134,4 +134,9 @@ def test_array_v3_fill_value(store: MemoryStore, fill_value: int, dtype_str: str
     )
 
     assert arr.fill_value == np.dtype(dtype_str).type(fill_value)
-    assert arr.fill_value.dtype == arr.dtype
+    if arr.dtype.kind != "S":
+        # np.dtype("S6").type(0) returns np.bytes_(b""),
+        # which has a dtype of np.dtype("S")
+        # For now, we don't require that fill_value.dtype *always*
+        # equals dtype
+        assert arr.fill_value.dtype == arr.dtype

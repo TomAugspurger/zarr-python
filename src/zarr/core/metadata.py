@@ -638,8 +638,9 @@ def parse_fill_value_v3(
     A scalar instance of `dtype`
     """
     if fill_value is None:
-        return dtype.type(0)
-    if isinstance(fill_value, Sequence) and not isinstance(fill_value, str):
+        fill_value = dtype.type(0)
+
+    if isinstance(fill_value, Sequence) and not isinstance(fill_value, str | bytes):
         if dtype in (np.complex64, np.complex128):
             dtype = cast(COMPLEX_DTYPE, dtype)
             if len(fill_value) == 2:

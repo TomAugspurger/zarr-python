@@ -457,6 +457,28 @@ class AsyncArray:
             return self.name.split("/")[-1]
         return None
 
+    @property
+    def filters(self) -> None:
+        return None
+        # return list(self.codec_pipeline.array_array_codecs)
+
+    @property
+    def compressors(self) -> None:
+        return None
+        # return list(self.codec_pipeline.bytes_bytes_codecs)
+
+    @property
+    def compressor(self) -> None:
+        return None
+        # compressors = self.compressors
+        # n = len(compressors)
+        # if n == 0:
+        #     return None
+        # elif n == 1:
+        #     return compressors[0]
+        # else:
+        #     raise ValueError
+
     async def _get_selection(
         self,
         indexer: Indexer,
@@ -635,6 +657,18 @@ class AsyncArray:
 @dataclass(frozen=True)
 class Array:
     _async_array: AsyncArray
+
+    @property
+    def filters(self) -> None:
+        return self._async_array.filters
+
+    @property
+    def compressors(self) -> None:
+        return self._async_array.compressors
+
+    @property
+    def compressor(self) -> None:
+        return self._async_array.compressor
 
     @classmethod
     @_deprecate_positional_args

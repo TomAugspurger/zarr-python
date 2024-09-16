@@ -382,6 +382,10 @@ class AsyncGroup:
         """
         store_path = await make_store_path(store)
 
+        if zarr_format == 2 or zarr_format is None:
+            if use_consolidated is None:
+                use_consolidated = ".zmetadata"
+
         if zarr_format == 2:
             paths = [store_path / ZGROUP_JSON, store_path / ZATTRS_JSON]
             if use_consolidated:
@@ -1091,10 +1095,10 @@ class AsyncGroup:
                 yield key
 
     # todo: decide if this method should be separate from `array_keys`
-    async def arrays(self) -> AsyncGenerator[AsyncArray, None]:
-        async for _, value in self.members():
+    async def arrays(self) -> AsyncGenerator[tuple[str, AsyncArray], None]:
+        async for key, value in self.members():
             if isinstance(value, AsyncArray):
-                yield value
+                yield key, value
 
     async def tree(self, expand: bool = False, level: int | None = None) -> Any:
         raise NotImplementedError
@@ -1269,8 +1273,9 @@ class Group(SyncMixin):
     def array_keys(self) -> tuple[str, ...]:
         return tuple(self._sync_iter(self._async_group.array_keys()))
 
-    def arrays(self) -> tuple[Array, ...]:
-        return tuple(Array(obj) for obj in self._sync_iter(self._async_group.arrays()))
+    def arrays(self) -> Generator[tuple[str, Array], None]:
+        for k, v in self._sync_iter(self._async_group.arrays()):
+            yield k, Array(v)
 
     def tree(self, expand: bool = False, level: int | None = None) -> Any:
         return self._sync(self._async_group.tree(expand=expand, level=level))

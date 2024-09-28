@@ -4,21 +4,22 @@ from numpy.testing import assert_array_equal
 
 pytest.importorskip("hypothesis")
 
-import hypothesis.extra.numpy as npst  # noqa
-import hypothesis.strategies as st  # noqa
-from hypothesis import given, settings  # noqa
-from zarr.strategies import arrays, np_arrays, basic_indices  # noqa
+import hypothesis.extra.numpy as npst  # noqa: E402
+import hypothesis.strategies as st  # noqa: E402
+from hypothesis import given  # noqa: E402
+
+from zarr.testing.strategies import arrays, basic_indices, numpy_arrays, zarr_formats  # noqa: E402
 
 
-@given(st.data())
-def test_roundtrip(data):
-    nparray = data.draw(np_arrays)
-    zarray = data.draw(arrays(arrays=st.just(nparray)))
+@given(data=st.data(), zarr_format=zarr_formats)
+def test_roundtrip(data: st.DataObject, zarr_format: int) -> None:
+    nparray = data.draw(numpy_arrays(zarr_formats=st.just(zarr_format)))
+    zarray = data.draw(arrays(arrays=st.just(nparray), zarr_formats=st.just(zarr_format)))
     assert_array_equal(nparray, zarray[:])
 
 
 @given(data=st.data())
-def test_basic_indexing(data):
+def test_basic_indexing(data: st.DataObject) -> None:
     zarray = data.draw(arrays())
     nparray = zarray[:]
     indexer = data.draw(basic_indices(shape=nparray.shape))
@@ -32,7 +33,7 @@ def test_basic_indexing(data):
 
 
 @given(data=st.data())
-def test_vindex(data):
+def test_vindex(data: st.DataObject) -> None:
     zarray = data.draw(arrays())
     nparray = zarray[:]
 

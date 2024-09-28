@@ -1,39 +1,42 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import zarr.api.asynchronous as async_api
+from zarr._compat import _deprecate_positional_args
 from zarr.core.array import Array, AsyncArray
-from zarr.core.buffer import NDArrayLike
-from zarr.core.common import JSON, AccessModeLiteral, ChunkCoords, ZarrFormat
 from zarr.core.group import Group
 from zarr.core.sync import sync
-from zarr.store import StoreLike
+
+if TYPE_CHECKING:
+    from zarr.core.buffer import NDArrayLike
+    from zarr.core.common import JSON, AccessModeLiteral, ChunkCoords, ZarrFormat
+    from zarr.store import StoreLike
 
 __all__ = [
+    "array",
     "consolidate_metadata",
     "copy",
     "copy_all",
     "copy_store",
-    "load",
-    "open",
-    "open_consolidated",
-    "save",
-    "save_array",
-    "save_group",
-    "tree",
-    "array",
-    "group",
-    "open_group",
     "create",
     "empty",
     "empty_like",
     "full",
     "full_like",
+    "group",
+    "load",
     "ones",
     "ones_like",
+    "open",
     "open_array",
+    "open_consolidated",
+    "open_group",
     "open_like",
+    "save",
+    "save_array",
+    "save_group",
+    "tree",
     "zeros",
     "zeros_like",
 ]
@@ -61,6 +64,7 @@ def load(
     return sync(async_api.load(store=store, zarr_version=zarr_version, path=path))
 
 
+@_deprecate_positional_args
 def open(
     store: StoreLike | None = None,
     *,
@@ -105,6 +109,7 @@ def save(
     )
 
 
+@_deprecate_positional_args
 def save_array(
     store: StoreLike,
     arr: NDArrayLike,
@@ -132,6 +137,7 @@ def save_group(
     zarr_version: ZarrFormat | None = None,  # deprecated
     zarr_format: ZarrFormat | None = None,
     path: str | None = None,
+    storage_options: dict[str, Any] | None = None,
     **kwargs: NDArrayLike,
 ) -> None:
     return sync(
@@ -141,6 +147,7 @@ def save_group(
             zarr_version=zarr_version,
             zarr_format=zarr_format,
             path=path,
+            storage_options=storage_options,
             **kwargs,
         )
     )
@@ -155,9 +162,10 @@ def array(data: NDArrayLike, **kwargs: Any) -> Array:
     return Array(sync(async_api.array(data=data, **kwargs)))
 
 
+@_deprecate_positional_args
 def group(
-    *,  # Note: this is a change from v2
     store: StoreLike | None = None,
+    *,  # Note: this is a change from v2
     overwrite: bool = False,
     chunk_store: StoreLike | None = None,  # not used in async_api
     cache_attrs: bool | None = None,  # default changed, not used in async_api
@@ -186,6 +194,7 @@ def group(
     )
 
 
+@_deprecate_positional_args
 def open_group(
     store: StoreLike | None = None,
     *,  # Note: this is a change from v2

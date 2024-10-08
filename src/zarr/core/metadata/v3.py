@@ -28,7 +28,7 @@ from zarr.core.chunk_key_encodings import ChunkKeyEncoding
 from zarr.core.common import ZARR_JSON, parse_named_configuration, parse_shapelike
 from zarr.core.config import config
 from zarr.core.metadata.common import ArrayMetadata, parse_attributes
-from zarr.errors import MetadataValidationError, NodeTypeValidationError
+from zarr.errors import NodeTypeValidationError, ZarrVersionValidationError
 from zarr.registry import get_codec_class
 
 DEFAULT_DTYPE = "float64"
@@ -37,13 +37,13 @@ DEFAULT_DTYPE = "float64"
 def parse_zarr_format(data: object) -> Literal[3]:
     if data == 3:
         return 3
-    raise MetadataValidationError(f"Invalid value. Expected 3. Got {data}.")
+    raise ZarrVersionValidationError(3, data)
 
 
 def parse_node_type_array(data: object) -> Literal["array"]:
     if data == "array":
         return "array"
-    raise NodeTypeValidationError(f"Invalid value. Expected 'array'. Got {data}.")
+    raise NodeTypeValidationError("array", data)
 
 
 def parse_codecs(data: object) -> tuple[Codec, ...]:

@@ -8,6 +8,7 @@ from zarr.codecs.bytes import BytesCodec
 from zarr.core.buffer import default_buffer_prototype
 from zarr.core.chunk_key_encodings import DefaultChunkKeyEncoding, V2ChunkKeyEncoding
 from zarr.core.metadata.v3 import ArrayV3Metadata, DataType
+from zarr.errors import NodeTypeValidationError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -23,6 +24,7 @@ import pytest
 from zarr.core.metadata.v3 import (
     parse_dimension_names,
     parse_fill_value,
+    parse_node_type_array,
     parse_zarr_format,
 )
 
@@ -52,12 +54,27 @@ dtypes = (*bool_dtypes, *int_dtypes, *float_dtypes, *complex_dtypes)
 
 @pytest.mark.parametrize("data", [None, 1, 2, 4, 5, "3"])
 def test_parse_zarr_format_invalid(data: Any) -> None:
-    with pytest.raises(ValueError, match=f"Invalid value. Expected 3. Got {data}"):
+    with pytest.raises(
+        ValueError, match=f"Invalid value for 'zarr_format'. Expected '3'. Got '{data}'"
+    ):
         parse_zarr_format(data)
 
 
 def test_parse_zarr_format_valid() -> None:
     assert parse_zarr_format(3) == 3
+
+
+@pytest.mark.parametrize("data", [None, "invalid"])
+def test_parse_node_type_array_invalid(data: Any) -> None:
+    with pytest.raises(
+        NodeTypeValidationError,
+        match=f"Invalid value for 'node_type'. Expected 'array'. Got '{data}'.",
+    ):
+        assert parse_node_type_array(data)
+
+
+def test_parse_node_type_array_valid() -> None:
+    assert parse_node_type_array("array") == "array"
 
 
 @pytest.mark.parametrize("data", [(), [1, 2, "a"], {"foo": 10}])

@@ -29,6 +29,12 @@ class MetadataValidationError(_BaseZarrError):
     """An exception raised when the Zarr metadata is invalid in some way"""
 
 
+class ZarrVersionValidationError(MetadataValidationError):
+    """Raised when the zarr_version in the Zarr metadata is invalid."""
+
+    _msg = "Invalid value for 'zarr_format'. Expected '{}'. Got '{}'."
+
+
 class NodeTypeValidationError(MetadataValidationError):
     """
     Specialized exception when the node_type of the metadata document is incorrect..
@@ -36,6 +42,8 @@ class NodeTypeValidationError(MetadataValidationError):
     This can be raised when the value is invalid or unexpected given the context,
     for example an 'array' node when we expected a 'group'.
     """
+
+    _msg = "Invalid value for 'node_type'. Expected '{}'. Got '{}'."
 
 
 __all__ = [

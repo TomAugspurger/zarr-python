@@ -33,6 +33,7 @@ dependencies = [
     'crc32c>=2.3',
     'typing_extensions>=4.6',
     'donfig>=0.8',
+    'packaging',
 ]
 
 dynamic = [

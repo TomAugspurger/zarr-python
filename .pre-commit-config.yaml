@@ -35,6 +35,7 @@ repos:
           - numpy
           - typing_extensions
           - universal-pathlib
+          - packaging
           # Tests
           - pytest
   - repo: https://github.com/scientific-python/cookie

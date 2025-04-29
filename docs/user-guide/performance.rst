@@ -273,3 +273,68 @@ Configuring Blosc
 -----------------
 
 Coming soon.
+
+
+.. _user-guide-memory:
+
+Memory Usage
+------------
+
+Wherever possible, zarr-python aims to have zero memory overhead on the data
+path. Zarr-python itself has some memory overhead for tracking metadata, and the
+codecs might require some intermediate scratch buffers. But zarr-python
+shouldn't allocate large blocks of memory unnecessarily.
+
+Consider the theoretical memory usage of reading a 1-D array with
+
+- dtype: float32
+- shape: `(1000,)`
+- chunks: `(100,)`
+
+The final result of reading a single chunk is a buffer with 100 elements * 4
+bytes / element = 400 bytes. The *peak* memory usage and the *total bytes
+allocated* depend on the codecs.
+
+Reading Uncompressed Data
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The simplest case is uncompressed data with no codecs. In this case, the bytes
+in the Store are identical to the bytes in the in-memory ndarray. **If the store
+supports it**, then these can be read into the output chunk directly, and the
+total number of bytes allocated, is exactly equal to the total number of bytes
+read (400 bytes in our example).
+
+You can check whether a given store supports zero-copy reading uncompressed data
+with the runtime-checkable `zarr.abc.store.ReadInto` protocol:
+
+```
+>>> import zarr.abc.store
+>>> import zarr.storage
+>>> store = zarr.storage.LocalStore(".")
+>>> isinstance(store, zarr.abc.store.ReadInto)
+True
+```
+
+Reading Compressed Data
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Reading compressed data, or more generally reading data with one or more codecs
+that somehow transform the bytes, will result in intermediate allocations. But
+zarr-python will still attempt to reach the lowest possible memory usage.
+
+Consider the example of reading an array that's been stored with the default
+codec pipeline (`BytesCodec(endian="little")`, `ZstdCodec()`). The in-memory
+size of a chunk is again 400 bytes, and suppose the Zstd-compressed size is 256
+bytes. zarr-python can read this chunk with two memory allocations:
+
+1. A 256-byte allocation to read the zstd-compressed data from the store
+2. A 400-byte allocation to hold the decompressed data
+
+Note that no intermediate copies are necessary. Zarr (and the decompression
+library, numcodecs in this case) doesn't need an intermediate buffer to store
+the decompressed data; it can decompress directly into the output buffer.
+
+In this example, we've allocated 656 bytes (400 for the output buffer and 256
+for the in-memory compressed bytes) and our peak memory usage is briefly 656
+bytes (when both the output ndarray and in-memory compressed bytes are in
+memory, before the buffer of compressed bytes is freed).

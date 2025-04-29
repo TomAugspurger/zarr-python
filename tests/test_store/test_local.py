@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pytest
 
 import zarr
@@ -74,3 +75,18 @@ class TestLocalStore(StoreTests[LocalStore, cpu.Buffer]):
         await self.set(store, key, data_buf)
         observed = await store.get(key, prototype=None)
         assert_bytes_equal(observed, data_buf)
+
+    async def test_zero_copy_readinto(self, store: LocalStore):
+        """
+        Verify that the store zero-copy reads into the output buffer.
+        """
+        data_buf = self.buffer_cls.from_bytes(b"\x01\x02\x03\x04")
+        key = "c/0"
+        await self.set(store, key, data_buf)
+        # we can't use `from_bytes` here because that makes an
+        # unwritable array...
+        arr = np.zeros(4, dtype="B")
+        out = self.buffer_cls(arr)
+        result = await store.get_into(key, out)
+
+        assert_bytes_equal(result, data_buf)

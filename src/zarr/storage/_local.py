@@ -5,7 +5,7 @@ import io
 import os
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, overload
 
 from zarr.abc.store import (
     ByteRequest,
@@ -24,21 +24,77 @@ if TYPE_CHECKING:
     from zarr.core.buffer import BufferPrototype
 
 
-def _get(path: Path, prototype: BufferPrototype, byte_range: ByteRequest | None) -> Buffer:
+@overload
+def _get(
+    path: Path,
+    prototype: BufferPrototype,
+    byte_range: ByteRequest | None,
+    out: None,
+) -> Buffer:
+    """Prototype provided."""
+
+
+@overload
+def _get(
+    path: Path,
+    prototype: None,
+    byte_range: ByteRequest | None,
+    out: Buffer,
+) -> Buffer:
+    """Output Buffer provided."""
+
+
+def _get(
+    path: Path,
+    prototype: BufferPrototype | None,
+    byte_range: ByteRequest | None,
+    out: Buffer | None,
+) -> Buffer:
     if byte_range is None:
-        return prototype.buffer.from_bytes(path.read_bytes())
+        if prototype is not None:
+            # this cast should be unnecessary. Included to avoid
+            # Item "None" of "BufferPrototype | None" has no attribute "buffer"  [union-attr]
+            return prototype.buffer.from_bytes(path.read_bytes())
+        elif out is not None:
+            with path.open("rb") as f:
+                # TODO. Figure out the type here...
+                # Our type only says ArrayLike. We need
+                # "supports the buffer protocol".
+                f.readinto(out.as_array_like())  # type: ignore[arg-type]
+            return out
+        else:  # pragma: no-coverage; unreachable.
+            # The overloads above should make this unreachable.
+            raise RuntimeError("Must provide 'prototype' or 'out'")
+
     with path.open("rb") as f:
         size = f.seek(0, io.SEEK_END)
-        if isinstance(byte_range, RangeByteRequest):
-            f.seek(byte_range.start)
-            return prototype.buffer.from_bytes(f.read(byte_range.end - f.tell()))
-        elif isinstance(byte_range, OffsetByteRequest):
-            f.seek(byte_range.offset)
-        elif isinstance(byte_range, SuffixByteRequest):
-            f.seek(max(0, size - byte_range.suffix))
-        else:
-            raise TypeError(f"Unexpected byte_range, got {byte_range}.")
-        return prototype.buffer.from_bytes(f.read())
+        read_size: int | None
+        # for each of these, we seek and then read n bytes.
+
+        match byte_range:
+            case RangeByteRequest():
+                read_size = byte_range.end - f.tell()
+            case OffsetByteRequest():
+                f.seek(byte_range.offset)
+                read_size = None
+            case SuffixByteRequest():
+                f.seek(max(0, size - byte_range.suffix))
+                read_size = None
+            case _:
+                raise TypeError(f"Unexpected byte_range, got {byte_range}.")
+
+        if prototype is not None:
+            return prototype.buffer.from_bytes(f.read(read_size))
+        elif out is not None:
+            # whose responsibility is it to ensure that `out` is appropriate for `size`?
+            # TODO. Figure out the type here...
+            # Our type only says ArrayLike. We need
+            # "supports the buffer protocol".
+            f.readinto(out.as_array_like())  # type: ignore[arg-type]
+            return out
+        else:  # pragma: no-coverage; unreachable.
+            # The overloads above should make this unreachable.
+            raise RuntimeError("Must provide 'prototype' or 'out'")
 
 
 def _put(
@@ -102,6 +158,10 @@ class LocalStore(Store):
             )
         self.root = root
 
+    @property
+    def supports_read_into(self) -> Literal[True]:
+        return True
+
     async def _open(self) -> None:
         if not self.read_only:
             self.root.mkdir(parents=True, exist_ok=True)
@@ -137,7 +197,19 @@ class LocalStore(Store):
         path = self.root / key
 
         try:
-            return await asyncio.to_thread(_get, path, prototype, byte_range)
+            return await asyncio.to_thread(_get, path, prototype, byte_range, None)
+        except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+            return None
+
+    async def get_into(
+        self,
+        key: str,
+        out: Buffer,
+        byte_range: ByteRequest | None = None,
+    ) -> Buffer | None:
+        path = self.root / key
+        try:
+            return await asyncio.to_thread(_get, path, None, byte_range, out)
         except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
             return None
 

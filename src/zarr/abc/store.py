@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from asyncio import gather
 from dataclasses import dataclass
 from itertools import starmap
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 from zarr.core.buffer.core import default_buffer_prototype
 from zarr.core.common import concurrent_map
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from zarr.core.buffer import Buffer, BufferPrototype
     from zarr.core.common import BytesLike
 
-__all__ = ["ByteGetter", "ByteSetter", "Store", "set_or_delete"]
+__all__ = ["ByteGetter", "ByteSetter", "ReadInto", "Store", "set_or_delete"]
 
 
 @dataclass
@@ -448,6 +448,10 @@ class Store(ABC):
         sizes = await concurrent_map(keys, self.getsize, limit=limit)
         return sum(sizes)
 
+    @property
+    def supports_read_into(self) -> bool:
+        return False
+
 
 @runtime_checkable
 class ByteGetter(Protocol):
@@ -485,3 +489,22 @@ async def set_or_delete(byte_setter: ByteSetter, value: Buffer | None) -> None:
         await byte_setter.delete()
     else:
         await byte_setter.set(value)
+
+
+@runtime_checkable
+class ReadInto(Protocol):
+    @property
+    def supports_read_into(self) -> Literal[True]:
+        return True
+
+    async def get_into(
+        self,
+        key: str,
+        out: Buffer,
+        byte_range: ByteRequest | None = None,
+    ) -> Buffer | None:
+        """ """
+        # Note to implementers: you *must* return `out` if you
+        # read some data into it! Returning `None` is unfortunately
+        # interpreted as "this store doesn't contain this key".
+        # `out` has already been checked by zarr-python to match.

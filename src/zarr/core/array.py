@@ -1309,6 +1309,7 @@ class AsyncArray(Generic[T_ArrayMetadata]):
         selection: BasicSelection,
         *,
         prototype: BufferPrototype | None = None,
+        out: NDBuffer | None = None,
     ) -> NDArrayLikeOrScalar:
         """
         Asynchronous function that retrieves a subset of the array's data based on the provided selection.
@@ -1319,6 +1320,8 @@ class AsyncArray(Generic[T_ArrayMetadata]):
             A selection object specifying the subset of data to retrieve.
         prototype : BufferPrototype, optional
             A buffer prototype to use for the retrieved data (default is None).
+        out : NDBuffer, optional
+            If given, load the selected data directly into this buffer.
 
         Returns
         -------
@@ -1340,6 +1343,12 @@ class AsyncArray(Generic[T_ArrayMetadata]):
         array(0, dtype=int32)
 
         """
+        # TODO: what are the expectations around `out` and `selection`?
+        # Can I do `out` with fancy indexing? If so, what size is `out`?
+        # The smallest unit we can read is a chunk (is that true?
+        # There's sharding, sure, but ignore that. With uncompressed data
+        # we could in theory read any contiguous subset that's a multiple
+        # of the itemsize). Ignore all this! Too complicated!
         if prototype is None:
             prototype = default_buffer_prototype()
         indexer = BasicIndexer(
@@ -1347,7 +1356,7 @@ class AsyncArray(Generic[T_ArrayMetadata]):
             shape=self.metadata.shape,
             chunk_grid=self.metadata.chunk_grid,
         )
-        return await self._get_selection(indexer, prototype=prototype)
+        return await self._get_selection(indexer, prototype=prototype, out=out)
 
     async def _save_metadata(self, metadata: ArrayMetadata, ensure_parents: bool = False) -> None:
         """

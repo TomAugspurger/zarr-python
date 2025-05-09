@@ -107,6 +107,15 @@ class BaseCodec(Metadata, Generic[CodecInput, CodecOutput]):
             The array chunk grid
         """
 
+    @property
+    def supports_decode_into(self):
+        """
+        Whether the codec supports zero-copy decoding into an output buffer.
+        
+        This can be used to reduce the number of intermediate copies when reading.
+        """
+        return False
+
     async def _decode_single(self, chunk_data: CodecOutput, chunk_spec: ArraySpec) -> CodecInput:
         raise NotImplementedError
 

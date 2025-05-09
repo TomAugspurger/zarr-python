@@ -83,6 +83,17 @@ class BatchedCodecPipeline(CodecPipeline):
     bytes_bytes_codecs: tuple[BytesBytesCodec, ...]
     batch_size: int
 
+    def _zero_copy_into_index(self) -> int | None:
+        """
+        The position of the codec that can write directly to the output buffer.
+
+        The output array allocated by Zarr or the user will have the shape of
+        the chunk. Assuming the codec supports it, this will be the last codec.
+
+        Returns `None` if the codec pipeline is unable to perform a zero-copy
+        read.
+        """
+
     def evolve_from_array_spec(self, array_spec: ArraySpec) -> Self:
         return type(self).from_codecs(c.evolve_from_array_spec(array_spec=array_spec) for c in self)
 

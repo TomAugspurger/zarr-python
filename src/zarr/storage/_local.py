@@ -41,6 +41,14 @@ def _get(path: Path, prototype: BufferPrototype, byte_range: ByteRequest | None)
         return prototype.buffer.from_bytes(f.read())
 
 
+def _get_into(path: Path, out: Buffer, byte_range: ByteRequest | None) -> None:
+    if byte_range is not None:
+        raise NotImplementedError("byte_range is not supported yet")
+    with path.open("rb") as f:
+        # TODO: check if there's a way to type this properly.
+        f.readinto(out)  # type: ignore[arg-type]
+
+
 def _put(
     path: Path,
     value: Buffer,
@@ -147,6 +155,25 @@ class LocalStore(Store):
             return await asyncio.to_thread(_get, path, prototype, byte_range)
         except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
             return None
+
+    async def get_into(
+        self,
+        key: str,
+        out: Buffer,
+        byte_range: ByteRequest | None = None,
+    ) -> None:
+        if byte_range is not None:
+            raise NotImplementedError("byte_range is not supported yet")
+        if not self._is_open:
+            await self._open()
+        assert isinstance(key, str)
+        path = self.root / key
+
+        try:
+            await asyncio.to_thread(_get_into, path, out, byte_range)
+        except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+            # silently? lol
+            return
 
     async def get_partial_values(
         self,

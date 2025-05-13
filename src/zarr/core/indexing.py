@@ -506,6 +506,17 @@ class ChunkProjection(NamedTuple):
     out_selection: tuple[Selector, ...] | npt.NDArray[np.intp] | slice
     is_complete_chunk: bool
 
+    @property
+    def shape(self) -> tuple[int, ...]:
+        shape = []
+        for s in self.chunk_selection:
+            if isinstance(s, slice):
+                shape.append((s.stop - s.start) // (s.step or 1))
+            else:
+                shape.append(len(s))
+
+        return tuple(shape)
+
 
 def is_slice(s: Any) -> TypeGuard[slice]:
     return isinstance(s, slice)

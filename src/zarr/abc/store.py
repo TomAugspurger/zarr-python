@@ -471,6 +471,14 @@ class Store(ABC):
         sizes = await concurrent_map(keys, self.getsize, limit=limit)
         return sum(sizes)
 
+    async def get_into(
+        self,
+        key: str,
+        out: Buffer,
+        byte_range: ByteRequest | None = None,
+    ) -> Buffer | None:
+        raise NotImplementedError
+
 
 @runtime_checkable
 class ByteGetter(Protocol):

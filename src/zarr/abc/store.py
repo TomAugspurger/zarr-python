@@ -486,7 +486,7 @@ class Store(ABC):
         key: str,
         out: Buffer,
         byte_range: ByteRequest | None = None,
-    ) -> Buffer | None:
+    ) -> int | None:
         raise NotImplementedError
 
 

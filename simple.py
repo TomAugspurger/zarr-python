@@ -1,14 +1,11 @@
 """
-┏━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┓
-┃ Benchmark  ┃ Duration    ┃ Throughput (GB/s) ┃
-┡━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━┩
-│ Zarr async │ 0.25 ± 0.02 │ 1.57              │
-│ simple     │ 0.09 ± 0.02 │ 4.63              │
-└────────────┴─────────────┴───────────────────┘
+A Zarr getitem implementation that's focused on simplicity and performance.
 """
 
 import asyncio
+import time
 import concurrent.futures
+import contextlib
 import inspect
 import math
 import os
@@ -16,8 +13,10 @@ import pathlib
 from collections.abc import Generator
 from typing import Any, cast
 
+import cupy
 import numcodecs.abc
 import numpy as np
+import nvtx
 import pytest
 
 import zarr
@@ -28,10 +27,14 @@ import zarr.codecs.blosc
 import zarr.codecs.transpose
 import zarr.codecs.zstd
 import zarr.core.buffer
+import zarr.core.buffer.gpu
+import zarr.core.chunk_grids
 import zarr.core.indexing
 import zarr.core.metadata.v3
 import zarr.storage
 from zarr.core.config import Config
+
+_METRICS = []
 
 
 def _is_contiguous_indexer(indexer: zarr.core.indexing.BasicIndexer) -> bool:
@@ -53,13 +56,64 @@ def _is_contiguous_indexer(indexer: zarr.core.indexing.BasicIndexer) -> bool:
 
 
 async def _get_wrapper(
-    store: zarr.abc.store.Store, key: str, prototype: zarr.core.buffer.BufferPrototype
+    store: zarr.abc.store.Store,
+    key: str,
+    prototype: zarr.core.buffer.BufferPrototype,
 ) -> tuple[str, zarr.core.buffer.Buffer | None]:
     """
     A wrapper around Store.get that also returns the key used.
     """
+    start = time.perf_counter()
     result = await store.get(key, prototype=prototype)
+    end = time.perf_counter()
+    _METRICS.append(
+        {
+            "op": "_get_wrapper",
+            "start": start,
+            "end": end,
+            "nbytes": len(result) if result is not None else None,
+        }
+    )
     return key, result
+
+
+async def _get_into_wrapper(
+    store: zarr.abc.store.Store,
+    key: str,
+    # buffer: collections.abc.Buffer,
+    host_memory_pool: cupy.cuda.pinned_memory.PinnedMemoryPool,
+) -> tuple[str, np.ndarray | None]:
+    """
+    A wrapper around Store.get_into that also returns the key used.
+    """
+    # TODO: avoid this for remove file systems.
+    # size = store.getsize(key)
+    t1 = time.perf_counter()
+    if isinstance(store, zarr.storage.LocalStore):
+        size = os.path.getsize(store.root / key)  # type: ignore[attr-defined]
+    else:
+        size = await store.getsize(key)
+
+    buffer = host_memory_pool.malloc(size)
+    result = await store.get_into(key, buffer)
+
+    assert result is not None
+
+    t2 = time.perf_counter()
+    _METRICS.append(
+        {
+            "op": "_get_into_wrapper",
+            "start": t1,
+            "end": t2,
+            "nbytes": size,
+        }
+    )
+
+    if result is None:
+        return key, None
+    else:
+        # for some reason, malloc can return a buffer larger than what we requested.
+        return key, np.asarray(buffer)[:size]
 
 
 def _decode_wrapper(
@@ -70,11 +124,13 @@ def _decode_wrapper(
     cp: zarr.core.indexing.ChunkProjection,
     use_decode_into: bool,
     fill_value: Any,
+    chunk_shape: tuple[int, ...],
 ) -> None:
     if buffer is None:
         out[cp.out_selection] = fill_value  # type: ignore[assignment]
         return
 
+    start = time.perf_counter()
     n_codecs = len(numcodecs_codecs)
     for i, codec in enumerate(numcodecs_codecs, 1):
         if i == n_codecs:
@@ -89,17 +145,73 @@ def _decode_wrapper(
                 # We *must* use a temporary buffer here.
                 tmp = codec.decode(buffer.as_array_like())
                 assert tmp is not None
-                out[cp.out_selection] = (
-                    prototype.buffer.from_bytes(tmp)
-                    .as_array_like()
-                    .view(out.dtype)
-                    .reshape(cp.shape)
-                )
+                # mmm this is no good.
+                if isinstance(tmp, bytes):
+                    # partial chunks
+                    out[cp.out_selection] = (
+                        prototype.buffer.from_bytes(tmp)
+                        .as_array_like()
+                        .view(out.dtype)
+                        .reshape(chunk_shape)[cp.chunk_selection]
+                    )
+                else:
+                    import cupy
+
+                    out[cp.out_selection] = cupy.asarray(tmp).view(out.dtype).reshape(cp.shape)
+
         else:
             # We *must* use a temporary buffer here.
             tmp = codec.decode(buffer.as_array_like())
             assert tmp is not None
             buffer = prototype.buffer.from_bytes(tmp)
+
+    stop = time.perf_counter()
+    _METRICS.append(
+        {
+            "start": start,
+            "end": stop,
+            "op": "_decode_wrapper",
+        }
+    )
+
+
+def _batch_decode_wrapper(
+    numcodecs_codecs: list[numcodecs.abc.Codec],
+    buffers: list[zarr.core.buffer.gpu.Buffer | None],
+    out: zarr.core.buffer.NDArrayLike,
+    cps: list[zarr.core.indexing.ChunkProjection],
+    fill_value: Any,
+) -> None:
+    """
+    A *batched* decoder, for high-latency, high-throughput decoders.
+    """
+    # TODO: consolidate buffers and cps into a single object.
+    # this assumes that numcodecs_codec supports passing a list of buffers.
+    # not necessarily true, but it is for nvcomp.
+    # TODO: handle nones?
+    # if buffer is None:
+    #     out[cp.out_selection] = fill_value  # type: ignore[assignment]
+    #     return
+
+    n_codecs = len(numcodecs_codecs)
+    if n_codecs > 1:
+        raise NotImplementedError("batch decoding not supported for multi-stage codecs")
+
+    codec = numcodecs_codecs[0]
+    mask = [buffer is not None for buffer in buffers]
+    tmp_arrays = iter(
+        codec.decode([buffer.as_array_like() for buffer in buffers if buffer is not None])
+    )
+
+    assert tmp_arrays is not None
+    for chunk_projection, is_valid in zip(cps, mask, strict=True):
+        if is_valid:
+            tmp_array = next(tmp_arrays)
+            out[chunk_projection.out_selection] = (
+                cupy.asarray(tmp_array).view(out.dtype).reshape(chunk_projection.shape)
+            )
+        else:
+            out[chunk_projection.out_selection] = fill_value  # type: ignore[assignment]
 
 
 async def getitem(
@@ -108,6 +220,7 @@ async def getitem(
     prototype: zarr.core.buffer.BufferPrototype | None = None,
     *,
     pool: concurrent.futures.Executor | None = None,
+    read_timeout: float | None = None,
 ) -> zarr.core.buffer.NDArrayLike:
     """
     An Array.getitem implementation focused on simplicity and memory usage.
@@ -155,11 +268,6 @@ async def getitem(
     )
     pool = pool or concurrent.futures.ThreadPoolExecutor()
 
-    if not all(cp.is_complete_chunk for cp in indexer):
-        # We can eventually support contiguous slices off the ends.
-        # We can't (ever?) support fancy indexing.
-        raise NotImplementedError("Partial chunks are not supported yet")
-
     def get_numcodecs_codec(codec: zarr.abc.codec.Codec) -> numcodecs.abc.Codec:
         match codec:
             case zarr.codecs.zstd.ZstdCodec():
@@ -181,8 +289,16 @@ async def getitem(
     use_decode_into = (
         _is_contiguous_indexer(indexer)
         and len(bytes_bytes_codecs) > 0
+        and all(cp.is_complete_chunk for cp in indexer)
         and "out" in inspect.signature(bytes_bytes_codecs[-1].decode).parameters
     )
+    try:
+        use_decode_into = use_decode_into and (
+            "out" in inspect.signature(bytes_bytes_codecs[-1].decode).parameters
+        )
+    except ValueError:
+        # can't inspect PyCapsule objects from nvcomp :/
+        use_decode_into = False
 
     out = prototype.nd_buffer.empty(
         shape=indexer.shape,
@@ -195,10 +311,18 @@ async def getitem(
     # We want to read from the store and decode (finished) chunks in parallel.
     # As soon as a read task is done, we'll schedule the decode task.
     # note: `asyncio.create_task` schedules this to run immediately.
+    #
+    # This is quite bad for the GPU. We really want to submit it a *batch*
+    # of work to decode at once. A basic benchmark showed that decoding a
+    # single buffer took 22ms, but decoding 100 buffers took 44ms.
+    #
+    # So how do we handle this? Another layer of indirection.
+    # We'll have a Queue of decode tasks.
+
     read_tasks = [asyncio.create_task(coro) for coro in coros]
     decode_futures = []
 
-    for read_future in asyncio.as_completed(read_tasks):
+    for read_future in asyncio.as_completed(read_tasks, timeout=read_timeout):
         # As soon as a read task is done, we'll schedule the decode task.
         key, maybe_buffer = await read_future
         cp = full_keys[key]
@@ -213,11 +337,120 @@ async def getitem(
                 cp,
                 use_decode_into,
                 array.metadata.fill_value,
+                chunk_shape=array.metadata.chunk_grid.chunk_shape,
             )
         )
 
     for future in concurrent.futures.as_completed(decode_futures):
         # And now we just check for errors.
+        future.result()
+
+    return out.as_ndarray_like()
+
+
+async def getitem_gpu(
+    array: zarr.AsyncArray[zarr.core.metadata.v3.ArrayV3Metadata],
+    selection: zarr.core.indexing.BasicSelection,
+    # prototype: zarr.core.buffer.BufferPrototype | None = None,
+    *,
+    pool: concurrent.futures.Executor | None = None,
+    host_memory_pool: cupy.cuda.pinned_memory.PinnedMemoryPool | None = None,
+    decode_batch_size: int = 256,
+) -> cupy.ndarray:
+    """
+    Read a selection of chunks into a GPU-backed array.
+
+    Notes
+    -----
+    This implementation ...
+
+    -
+    """
+    # Differences
+    # 1. Read into pinned host memory
+    # 2. Decode batches
+    host_memory_pool = host_memory_pool or cupy.get_default_pinned_memory_pool()
+    pool = pool or concurrent.futures.ThreadPoolExecutor()
+    indexer = zarr.core.indexing.BasicIndexer(
+        selection, array.metadata.shape, array.metadata.chunk_grid
+    )
+
+    if len(array.metadata.codecs) != 2:
+        raise NotImplementedError("Only single-stage codecs are supported")
+    _, codec = array.metadata.codecs
+    if not isinstance(codec, zarr.codecs.gpu.NvcompZstdCodec):
+        raise NotImplementedError("Only nvcomp codecs are supported")
+
+    assert isinstance(array.metadata.chunk_grid, zarr.core.chunk_grids.RegularChunkGrid)
+    keys = {array.metadata.encode_chunk_key(cp.chunk_coords): cp for cp in indexer}
+    full_keys = {(array.store_path / key).path: cp for key, cp in keys.items()}
+
+    with nvtx.annotate("empty"):
+        out = zarr.core.buffer.gpu.NDBuffer.empty(
+            shape=indexer.shape,
+            dtype=array.dtype,
+            order=array.order,
+        )
+
+    read_timeout = None
+    coros = [_get_into_wrapper(array.store, key, host_memory_pool) for key in full_keys]
+    read_tasks = [asyncio.create_task(coro) for coro in coros]
+    decode_futures = []
+    mini_batch = []
+
+    for read_future in asyncio.as_completed(read_tasks, timeout=read_timeout):
+        key, maybe_buffer = await read_future
+        cp = full_keys[key]
+        mini_batch.append((key, maybe_buffer, cp))
+        if len(mini_batch) == decode_batch_size:
+            keys, maybe_pinned_buffers, cps = zip(*mini_batch, strict=True)
+
+            maybe_buffers = [
+                zarr.core.buffer.gpu.Buffer(maybe_buffer) if maybe_buffer is not None else None
+                for maybe_buffer in maybe_pinned_buffers
+            ]
+
+            # these maybe_buffers are currently using pagable host memory.
+            # We'd like them to be in pinned memory.
+
+            decode_futures.append(
+                pool.submit(
+                    _batch_decode_wrapper,
+                    [codec._zstd_codec],
+                    maybe_buffers,
+                    out.as_ndarray_like(),
+                    cps,
+                    array.metadata.fill_value,
+                )
+            )
+            mini_batch = []
+
+    if mini_batch:
+        keys, maybe_pinned_buffers, cps = zip(*mini_batch, strict=True)
+
+        # this triggers the host to device copies.
+        maybe_buffers = [
+            zarr.core.buffer.gpu.Buffer(cupy.asarray(maybe_buffer))
+            if maybe_buffer is not None
+            else None
+            for maybe_buffer in maybe_pinned_buffers
+        ]
+
+        decode_futures.append(
+            pool.submit(
+                _batch_decode_wrapper,
+                [codec._zstd_codec],
+                maybe_buffers,
+                out.as_ndarray_like(),
+                cps,
+                array.metadata.fill_value,
+            )
+        )
+
+    for future in concurrent.futures.as_completed(decode_futures):
+        # And now we just check for errors.
+        # I wonder if we should even do this.
+        # This is a barrier that prevents any downstream operations from completing.
         future.result()
 
     return out.as_ndarray_like()
@@ -302,6 +535,27 @@ async def simple_array() -> zarr.AsyncArray[zarr.core.metadata.v3.ArrayV3Metadat
     return z
 
 
+@pytest.fixture
+async def simple_gpu_array() -> zarr.AsyncArray[zarr.core.metadata.v3.ArrayV3Metadata]:
+    """A non-parametrized array fixture."""
+    pytest.importorskip("cupy")
+    store = zarr.storage.MemoryStore()
+    shape, chunks = (10, 10), (5, 5)
+    with zarr.config.enable_gpu():
+        z = await zarr.api.asynchronous.create_array(
+            store=store,
+            name="test",
+            overwrite=True,
+            shape=shape,
+            chunks=chunks,
+            zarr_format=3,
+            dtype="int32",
+        )
+        z = cast(zarr.AsyncArray[zarr.core.metadata.v3.ArrayV3Metadata], z)
+        await z.setitem(slice(None), cupy.arange(math.prod(shape), dtype="int32").reshape(shape))
+        return z
+
+
 @pytest.mark.parametrize(
     "selection",
     [
@@ -371,6 +625,7 @@ async def test_getitem_missing(store: zarr.abc.store.Store) -> None:
         zarr_format=3,
         dtype="int32",
     )
+    z = cast(zarr.AsyncArray[zarr.core.metadata.v3.ArrayV3Metadata], z)
 
     result = await getitem(z, slice(None))
     expected = await z.getitem(slice(None))
@@ -396,11 +651,17 @@ async def test_multistage_codec(store: zarr.abc.store.Store) -> None:
     np.testing.assert_array_equal(result, expected)
 
 
-async def test_getitem_partial_raises(
-    simple_array: zarr.AsyncArray[zarr.core.metadata.v3.ArrayV3Metadata],
+@pytest.mark.parametrize("decode_batch_size", [1, 2])
+async def test_getitem_gpu(
+    simple_gpu_array: zarr.AsyncArray[zarr.core.metadata.v3.ArrayV3Metadata],
+    decode_batch_size: int,
 ) -> None:
-    with pytest.raises(NotImplementedError, match="Partial chunks are not supported yet"):
-        await getitem(simple_array, (slice(1), slice(1)))
+    with zarr.config.enable_gpu():
+        result = await getitem_gpu(
+            simple_gpu_array, slice(None), decode_batch_size=decode_batch_size
+        )
+        expected = await simple_gpu_array.getitem(slice(None))
+    np.testing.assert_array_equal(result.get(), expected.get())  # type: ignore[attr-defined]
 
 
 async def main() -> None:  # pragma: no cover
@@ -458,77 +719,107 @@ async def main() -> None:  # pragma: no cover
     ]
 
     records = []
-    for params in param_grid:
-        # setup
-        # SHAPE = (10_000, 10_000)
-        # CHUNKS = (100, 10_000)
-        DTYPE = "int32"
-        NUMEL = math.prod(params.shape)
-        store = zarr.storage.LocalStore("test.zarr")
-        array = zarr.create_array(
-            store=store,
-            name="simple",
-            overwrite=True,
-            shape=params.shape,
-            chunks=params.chunks,
-            dtype=DTYPE,
-        )
-        array[:] = np.arange(NUMEL, dtype="int32").reshape(params.shape)
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=(os.cpu_count() or 32) - 1)
+    # for device in ["gpu", "cpu"]:
+    for device in ["cpu", "gpu"]:
+        if device == "gpu":
+            ctx = zarr.config.enable_gpu()
+            func = getitem_gpu
+            kwargs = {"decode_batch_size": 100}
+        else:
+            ctx = contextlib.nullcontext()
+            func = getitem
+            kwargs = {}
+        with ctx:
+            for params in param_grid:
+                # setup
+                # SHAPE = (10_000, 10_000)
+                # CHUNKS = (100, 10_000)
+                rich.print(f"Running {device} {params.shape} {params.chunks}")
+                DTYPE = "int32"
+                NUMEL = math.prod(params.shape)
+                store = zarr.storage.LocalStore("test.zarr")
+                array = zarr.create_array(
+                    store=store,
+                    name="simple",
+                    overwrite=True,
+                    shape=params.shape,
+                    chunks=params.chunks,
+                    dtype=DTYPE,
+                )
+                if device == "gpu":
+                    array[:] = cupy.arange(NUMEL, dtype="int32").reshape(params.shape)
+                else:
+                    array[:] = np.arange(NUMEL, dtype="int32").reshape(params.shape)
+                pool = concurrent.futures.ThreadPoolExecutor(max_workers=(os.cpu_count() or 32) - 1)
 
-        z = await zarr.api.asynchronous.open_array(
-            store="test.zarr", path="custom-2", zarr_format=3
-        )
+                z = await zarr.api.asynchronous.open_array(
+                    store="test.zarr", path="simple", zarr_format=3
+                )
 
-        rs_zarr_async_getitem = await RecordSet.acollect(
-            "Zarr async",
-            z.getitem,
-            selection=slice(None),
-        )
-        rs_simple = await RecordSet.acollect("simple", getitem, z, slice(None), pool=pool)
-        # validate
-        expected = rs_zarr_async_getitem.records[0].value
-        np.testing.assert_array_equal(rs_simple.records[0].value, expected)
+                rs_zarr_async_getitem = await RecordSet.acollect(
+                    "Zarr async",
+                    z.getitem,
+                    selection=slice(None),
+                )
+                rs_simple = await RecordSet.acollect(
+                    "simple",
+                    func,
+                    z,
+                    slice(None),
+                    pool=pool,
+                    **kwargs,
+                )
+                # validate
+                expected = rs_zarr_async_getitem.records[0].value
+                if device == "gpu":
+                    np.testing.assert_array_equal(rs_simple.records[0].value.get(), expected.get())
+                else:
+                    np.testing.assert_array_equal(rs_simple.records[0].value, expected)
 
-        # report
-        results = Run(
-            sets=[
-                rs_zarr_async_getitem,
-                rs_simple,
-            ],
-            nbytes=z.nbytes,
-        )
-        rich.print(results.summarize())
-        # shape, chunks, throughput
-        records.extend(
-            (
-                str(params.shape),
-                str(params.chunks),
-                "simple",
-                expected.nbytes / x.duration,
-            )
-            for x in rs_simple.records
-        )
+                # report
+                results = Run(
+                    sets=[
+                        rs_zarr_async_getitem,
+                        rs_simple,
+                    ],
+                    nbytes=z.nbytes,
+                )
+                rich.print(results.summarize())
+                # shape, chunks, throughput
+                records.extend(
+                    (
+                        device,
+                        str(params.shape),
+                        str(params.chunks),
+                        "simple",
+                        expected.nbytes / x.duration,
+                    )
+                    for x in rs_simple.records
+                )
 
-        records.extend(
-            (
-                str(params.shape),
-                str(params.chunks),
-                "zarr",
-                expected.nbytes / x.duration,
-            )
-            for x in rs_zarr_async_getitem.records
-        )
+                records.extend(
+                    (
+                        device,
+                        str(params.shape),
+                        str(params.chunks),
+                        "zarr",
+                        expected.nbytes / x.duration,
+                    )
+                    for x in rs_zarr_async_getitem.records
+                )
 
-    df = pd.DataFrame(records, columns=["shape", "chunks", "implementation", "throughput"])
+    df = pd.DataFrame(
+        records, columns=["device", "shape", "chunks", "implementation", "throughput"]
+    )
     sns.catplot(
         data=df,
         hue="implementation",
+        row="device",
         x="chunks",
         y="throughput",
         kind="bar",
         col="shape",
-        col_wrap=2,
+        # col_wrap=2,
         sharex=False,
     )
     plt.savefig("simple.png")

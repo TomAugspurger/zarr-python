@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from logging import getLogger
 from typing import TYPE_CHECKING, Self
 
@@ -107,6 +108,18 @@ class MemoryStore(Store):
             return await self.get(key, prototype=prototype, byte_range=byte_range)
 
         return await concurrent_map(key_ranges, _get, limit=None)
+
+    async def get_into(
+        self,
+        key: str,
+        out: Buffer,
+        byte_range: ByteRequest | None = None,
+    ) -> int | None:
+        # docstring inherited
+        if byte_range is not None:
+            raise NotImplementedError("byte_range not supported for MemoryStore")
+        with io.BytesIO(self._store_dict[key].to_bytes()) as f:
+            return f.readinto(out)
 
     async def exists(self, key: str) -> bool:
         # docstring inherited

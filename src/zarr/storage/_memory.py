@@ -38,6 +38,7 @@ class MemoryStore(Store):
     supports_writes: bool = True
     supports_deletes: bool = True
     supports_listing: bool = True
+    supports_get_into: bool = True
 
     _store_dict: MutableMapping[str, Buffer]
 
@@ -92,6 +93,21 @@ class MemoryStore(Store):
             return prototype.buffer.from_buffer(value[start:stop])
         except KeyError:
             return None
+
+    async def get_into(
+        self,
+        key: str,
+        out: Buffer,
+        byte_range: ByteRequest | None = None,
+    ) -> bool:
+        if byte_range is not None:
+            raise NotImplementedError("byte_range is not supported yet")
+        try:
+            out[:] = self._store_dict[key].as_array_like()
+        except KeyError:
+            return False
+        else:
+            return True
 
     async def get_partial_values(
         self,

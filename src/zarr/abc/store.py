@@ -247,6 +247,11 @@ class Store(ABC):
         """Does the store support writes?"""
         ...
 
+    @property
+    def supports_get_into(self) -> bool:
+        """Does the store support get_into?"""
+        return False
+
     @abstractmethod
     async def set(self, key: str, value: Buffer) -> None:
         """Store a (key, value) pair.
@@ -476,7 +481,7 @@ class Store(ABC):
         key: str,
         out: Buffer,
         byte_range: ByteRequest | None = None,
-    ) -> Buffer | None:
+    ) -> bool:
         raise NotImplementedError
 
 

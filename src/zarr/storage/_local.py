@@ -115,6 +115,7 @@ class LocalStore(Store):
     supports_writes: bool = True
     supports_deletes: bool = True
     supports_listing: bool = True
+    supports_get_into: bool = True
 
     root: Path
 
@@ -219,7 +220,7 @@ class LocalStore(Store):
         key: str,
         out: Buffer,
         byte_range: ByteRequest | None = None,
-    ) -> None:
+    ) -> bool:
         if byte_range is not None:
             raise NotImplementedError("byte_range is not supported yet")
         if not self._is_open:
@@ -230,8 +231,14 @@ class LocalStore(Store):
         try:
             await asyncio.to_thread(_get_into, path, out, byte_range)
         except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
-            # silently? lol
-            return
+            # *somebody* needs to take care of setting the fill value
+            # It can't be us, since we don't have it, and even if we did,
+            # the store is operating at the byte level, not the array level.
+            # So we'll just return an indicator and rely on the caller to handle
+            # missing keys.
+            return False
+        else:
+            return True
 
     async def get_partial_values(
         self,
